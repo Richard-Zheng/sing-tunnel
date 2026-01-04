@@ -1,0 +1,85 @@
+{
+  "log": {
+    "level": "debug",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "docker-dns",
+        "server": "__DOCKER_DNS__"
+      },
+      {
+        "type": "tls",
+        "tag": "remote-dns",
+        "server": "1.1.1.1",
+        "detour": "ProxySel"
+      },
+      {
+        "type": "fakeip",
+        "tag": "fakeip-dns",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
+      }
+    ],
+    "rules": [
+      {
+        "domain": [
+          "api.cloudflare.com",
+          "pqtunnels.cloudflareresearch.com"
+        ],
+        "domain_suffix": [
+          "google.com",
+          "argotunnel.com",
+          "cftunnel.com",
+          "cloudflareaccess.com"
+        ],
+        "server": "remote-dns"
+      }
+    ],
+    "strategy": "ipv4_only",
+    "final": "docker-dns",
+    "reverse_mapping": true
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "tag": "proxy-in",
+      "listen": "127.0.0.1",
+      "listen_port": 7080
+    },
+    {
+      "type": "direct",
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "listen_port": 53
+    }
+  ],
+  "route": {
+    "rules": [
+      { "inbound": "dns-in", "action": "hijack-dns" },
+      {
+        "domain": [
+          "api.cloudflare.com",
+          "pqtunnels.cloudflareresearch.com"
+        ],
+        "domain_suffix": [
+          "google.com",
+          "argotunnel.com",
+          "cftunnel.com",
+          "cloudflareaccess.com"
+        ],
+        "outbound": "ProxySel"
+      },
+      { "ip_cidr": ["198.41.192.0/24", "198.41.200.0/24"], "outbound": "ProxySel" }
+    ],
+    "default_domain_resolver": {
+      "server": "docker-dns"
+    },
+    "final": "DirectOut",
+    "auto_detect_interface": true
+  },
+  "outbounds": [
+  ]
+}
