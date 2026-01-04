@@ -105,9 +105,9 @@ export ALL_PROXY="socks5://127.0.0.1:7080"
 
 echo "[INFO] Starting Cloudflared..."
 if [ -z "$TUNNEL_TOKEN" ]; then
-    echo "[ERROR] TUNNEL_TOKEN is missing!"
-    exit 1
+    # 如果没有提供 TUNNEL_TOKEN，使用本地配置模式
+    echo "[WARN] TUNNEL_TOKEN not provided, starting cloudflared in local config mode."
+    exec cloudflared tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
 fi
 
-# use strace to debug cannot execute: required file not found
 exec cloudflared tunnel --no-autoupdate run
