@@ -81,5 +81,9 @@
     "auto_detect_interface": true
   },
   "outbounds": [
+    {
+      "type": "direct",
+      "tag": "DirectOut"
+    }
   ]
 }
