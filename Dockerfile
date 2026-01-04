@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y git make curl
 # 这里拉取最新代码，如果 patch 冲突，可能需要回退 cloudflared 版本
 RUN git clone https://github.com/cloudflare/cloudflared.git .
 
-# 3. 【核心】下载并应用 Richard-Zheng 的补丁
+# 3. 【核心】下载并应用 socks 代理补丁
 COPY cloudflared_socks.patch /go/src/github.com/cloudflare/cloudflared/
 RUN git apply -v cloudflared_socks.patch
 
