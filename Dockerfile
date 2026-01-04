@@ -54,12 +54,12 @@ COPY --from=builder /go/src/github.com/cloudflare/cloudflared/cloudflared /usr/l
 RUN chmod +x /usr/local/bin/cloudflared
 
 # 3. 复制启动脚本
-COPY entrypoint.sh entrypoint.sh
-RUN chmod +x entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-COPY template.json template.json
+COPY template.json /template.json
 
 # 强制使用 HTTP2 (Patch 必须配合此协议才能走代理)
 ENV TUNNEL_TRANSPORT_PROTOCOL=http2
 
-ENTRYPOINT ["entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
