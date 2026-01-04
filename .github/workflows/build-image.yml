@@ -52,8 +52,8 @@ jobs:
           images: |
             ${{ secrets.DOCKER_USERNAME }}/sing-tunnel
           tags: |
-            type=ref,event=branch
             type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern=v*.*.*,increment=patch
 
       - name: Build and push
