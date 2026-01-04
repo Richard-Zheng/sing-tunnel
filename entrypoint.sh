@@ -105,9 +105,14 @@ export ALL_PROXY="socks5://127.0.0.1:7080"
 
 echo "[INFO] Starting Cloudflared..."
 if [ -z "$TUNNEL_TOKEN" ]; then
-    # 如果没有提供 TUNNEL_TOKEN，使用本地配置模式
-    echo "[WARN] TUNNEL_TOKEN not provided, starting cloudflared in local config mode."
-    exec cloudflared tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    if [ -f "/etc/cloudflared/config.yml" ]; then
+        echo "[INFO] TUNNEL_TOKEN not provided, starting cloudflared in local config mode."
+        exec cloudflared tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    else
+        echo "[WARN] Neither TUNNEL_TOKEN nor config.yml found. Starting in trycloudflare mode..."
+        # 使用环境变量 TRY_URL 或默认转发到本地 8080 端口
+        exec cloudflared tunnel --no-autoupdate --url "${TRY_URL:-http://host.docker.internal:8080}"
+    fi
 fi
 
 exec cloudflared tunnel --no-autoupdate run

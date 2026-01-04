@@ -1,0 +1,15 @@
+services:
+  cf-tunnel:
+    build: .
+    container_name: cf-tunnel
+    restart: always
+    environment:
+      - NODES_REGEX=香港
+    logging:
+      driver: none
+    volumes:
+      - /etc/sing-box/config.json:/nodes.json:ro
+      - /etc/cloudflared:/etc/cloudflared:ro
+      - /etc/localtime:/etc/localtime:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
