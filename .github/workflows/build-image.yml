@@ -29,13 +29,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set lowercase image names
-        run: |
-          echo "GHCR_IMAGE=ghcr.io/${{ github.repository_owner }}/sing-tunnel" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
-          if [ -n "${{ secrets.DOCKER_USERNAME }}" ]; then
-            echo "DOCKERHUB_IMAGE=${{ secrets.DOCKER_USERNAME }}/sing-tunnel" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
-          fi
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
@@ -60,8 +53,7 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            ${{ env.GHCR_IMAGE }}
-            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ secrets.DOCKER_USERNAME }}/sing-tunnel
           tags: |
             type=ref,event=branch
             type=sha
@@ -75,8 +67,6 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:cache
-          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:cache,mode=max
 
       - name: Image info
         run: |
