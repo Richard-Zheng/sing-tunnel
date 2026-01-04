@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: build-and-publish-${{ github.ref }}
@@ -21,13 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        run: |
+          echo "DOCKERHUB_IMAGE=${{ secrets.DOCKER_USERNAME }}/sing-tunnel" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -53,7 +55,7 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            ${{ secrets.DOCKER_USERNAME }}/sing-tunnel
+            ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=ref,event=branch
             type=sha
@@ -67,6 +69,8 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:cache
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:cache,mode=max
 
       - name: Image info
         run: |

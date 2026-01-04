@@ -1,9 +1,11 @@
 # ==========================================
 # Stage 1: Builder (编译 Cloudflared)
 # ==========================================
-FROM golang:1.24 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
 
-ENV GO111MODULE=on \
+ARG TARGETARCH
+ENV GOARCH=$TARGETARCH \
+    GO111MODULE=on \
     CGO_ENABLED=0 \
     CONTAINER_BUILD=1
 
@@ -28,6 +30,8 @@ RUN make cloudflared
 # ==========================================
 FROM debian:bookworm-slim
 
+ARG TARGETARCH
+
 # 安装运行时依赖
 # jq: 用于处理节点 JSON
 # ca-certificates: 用于 HTTPS 验证
@@ -39,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 1. 安装 Sing-box
 ARG SINGBOX_VERSION=1.12.12
 RUN curl -L -o /tmp/sing-box.tar.gz \
-    "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz" && \
+    "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${TARGETARCH}.tar.gz" && \
     tar -xzf /tmp/sing-box.tar.gz -C /tmp && \
     mv /tmp/sing-box-*/sing-box /usr/local/bin/sing-box && \
     chmod +x /usr/local/bin/sing-box && \
