@@ -94,11 +94,6 @@ echo "[INFO] Starting sing-box..."
 /usr/local/bin/sing-box run -c "$FINAL_CONFIG" &
 sleep 2
 
-# dns lookup test
-echo "[INFO] Testing DNS resolution..."
-dig +noedns google.com
-dig +noedns host.docker.internal
-
 echo "[INFO] Configuring Proxy Environment..."
 # 这里的关键是：打过补丁的 cloudflared 能够识别 ALL_PROXY 并正确走 SOCKS5 远程解析 DNS
 export ALL_PROXY="socks5://127.0.0.1:7080"

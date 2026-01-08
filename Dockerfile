@@ -67,7 +67,7 @@ ARG TARGETARCH
 # ca-certificates: 用于 HTTPS 验证
 #RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates jq iproute2 dnsutils \
+    curl ca-certificates jq iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # 1. 安装 Sing-box
