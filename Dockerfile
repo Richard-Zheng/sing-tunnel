@@ -1,7 +1,7 @@
 # ==========================================
-# Stage 1: Builder (编译 Cloudflared)
+# Stage 1: Cloudflared Builder
 # ==========================================
-FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24 AS cloudflared-builder
 
 ARG TARGETARCH
 ENV GOARCH=$TARGETARCH \
@@ -26,7 +26,37 @@ RUN git apply -v cloudflared_socks.patch
 RUN make cloudflared
 
 # ==========================================
-# Stage 2: Final (运行时环境)
+# Stage 2: Sing-box Builder
+# ==========================================
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS singbox-builder
+
+ARG SINGBOX_VERSION=1.12.15
+ARG TARGETOS TARGETARCH
+
+WORKDIR /go/src/github.com/sagernet/sing-box
+
+# 安装 git 和编译工具
+RUN apk add --no-cache git build-base
+
+# 拉取源码并切换到指定版本
+RUN git clone https://github.com/SagerNet/sing-box.git . && \
+    git checkout v${SINGBOX_VERSION}
+
+ENV CGO_ENABLED=0 \
+    GOOS=$TARGETOS \
+    GOARCH=$TARGETARCH
+
+# 编译 sing-box
+RUN export COMMIT=$(git rev-parse --short HEAD) \
+    && export VERSION=$(go run ./cmd/internal/read_tag) \
+    && go build -v -trimpath -tags \
+        "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale" \
+        -o /go/bin/sing-box \
+        -ldflags "-X \"github.com/sagernet/sing-box/constant.Version=$VERSION\" -s -w -buildid=" \
+        ./cmd/sing-box
+
+# ==========================================
+# Stage 3: Final (运行时环境)
 # ==========================================
 FROM debian:bookworm-slim
 
@@ -41,16 +71,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 1. 安装 Sing-box
-ARG SINGBOX_VERSION=1.12.12
-RUN curl -L -o /tmp/sing-box.tar.gz \
-    "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${TARGETARCH}.tar.gz" && \
-    tar -xzf /tmp/sing-box.tar.gz -C /tmp && \
-    mv /tmp/sing-box-*/sing-box /usr/local/bin/sing-box && \
-    chmod +x /usr/local/bin/sing-box && \
-    rm -rf /tmp/sing-box*
+COPY --from=singbox-builder /go/bin/sing-box /usr/local/bin/sing-box
+RUN chmod +x /usr/local/bin/sing-box
 
 # 2. 复制编译好的 Cloudflared
-COPY --from=builder /go/src/github.com/cloudflare/cloudflared/cloudflared /usr/local/bin/cloudflared
+COPY --from=cloudflared-builder /go/src/github.com/cloudflare/cloudflared/cloudflared /usr/local/bin/cloudflared
 RUN chmod +x /usr/local/bin/cloudflared
 
 # 3. 复制启动脚本
