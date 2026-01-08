@@ -66,6 +66,7 @@ ARG TARGETARCH
 # jq: 用于处理节点 JSON
 # ca-certificates: 用于 HTTPS 验证
 #RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates jq iproute2 \
     && rm -rf /var/lib/apt/lists/*
