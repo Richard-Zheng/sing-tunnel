@@ -20,7 +20,13 @@ if [ -f "$NODE_FILE" ]; then
     
     jq --arg regex "$REGEX" --slurpfile node_data "$NODE_FILE" '
         # 获取 nodes.json 中的 outbounds 数组
-        ($node_data[0].outbounds | if type == "array" then . else [] end) as $raw_nodes |
+        ($node_data[0].outbounds | if type == "array" then . else [] end) as $nodes_json_outbounds |
+        
+        # 获取 template.json 中的 outbounds 数组
+        (.outbounds | if type == "array" then . else [] end) as $template_outbounds |
+        
+        # 合并两个来源的节点
+        ($nodes_json_outbounds + $template_outbounds) as $raw_nodes |
         
         # 定义黑名单类型
         ["selector", "urltest", "direct", "block", "dns"] as $ignored_types |
@@ -51,7 +57,6 @@ if [ -f "$NODE_FILE" ]; then
         
         # 合并到 template 的 outbounds
         .outbounds = (
-            (.outbounds | if type == "array" then . else [] end) + 
             $filtered_nodes + 
             (if $auto_group != null then [$auto_group] else [] end)
         )
@@ -59,8 +64,49 @@ if [ -f "$NODE_FILE" ]; then
     
     echo "[INFO] Nodes merged using regex: '$REGEX'."
 else
-    echo "[INFO] No nodes.json found. Using raw template."
-    cp "$TEMPLATE_FILE" "$FINAL_CONFIG"
+    echo "[INFO] No nodes.json found. Processing template only..."
+    
+    REGEX="${NODE_REGEX:-.*}"
+    
+    jq --arg regex "$REGEX" '
+        # 获取 template.json 中的 outbounds 数组
+        (.outbounds | if type == "array" then . else [] end) as $raw_nodes |
+        
+        # 定义黑名单类型
+        ["selector", "urltest", "direct", "block", "dns"] as $ignored_types |
+        
+        # 筛选有效的节点对象
+        [ $raw_nodes[] | select(
+            type == "object" and 
+            .type != null and 
+            (.type as $t | $ignored_types | index($t) == null) and 
+            (.tag | type == "string" and test($regex))
+        ) ] as $filtered_nodes |
+        
+        # 提取 tag 列表
+        ($filtered_nodes | map(.tag)) as $node_tags |
+        
+        # 构建 Auto-Select 组
+        (if ($node_tags | length) > 0 then
+            {
+                "type": "urltest",
+                "tag": "ProxySel", 
+                "outbounds": $node_tags,
+                "url": "https://cp.cloudflare.com/generate_204",
+                "interval": "30m",
+                "tolerance": 10,
+                "interrupt_exist_connections": false
+            }
+        else null end) as $auto_group |
+        
+        # 更新 outbounds
+        .outbounds = (
+            $filtered_nodes + 
+            (if $auto_group != null then [$auto_group] else [] end)
+        )
+    ' "$TEMPLATE_FILE" > "$FINAL_CONFIG"
+    
+    echo "[INFO] Template processed using regex: '$REGEX'."
 fi
 
 # --------------------------------------------------------
