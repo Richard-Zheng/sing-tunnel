@@ -110,7 +110,15 @@ else
 fi
 
 # --------------------------------------------------------
-# 1. 动态探测 Docker DNS IP
+# 1. 设置 sing-box 日志等级
+# --------------------------------------------------------
+if [ -n "$SING_BOX_LOG_LEVEL" ]; then
+    echo "[INFO] Setting sing-box log level to: $SING_BOX_LOG_LEVEL"
+    jq --arg level "$SING_BOX_LOG_LEVEL" '.log.level = $level' "$FINAL_CONFIG" > "${FINAL_CONFIG}.tmp" && mv "${FINAL_CONFIG}.tmp" "$FINAL_CONFIG"
+fi
+
+# --------------------------------------------------------
+# 2. 动态探测 Docker DNS IP
 # --------------------------------------------------------
 echo "[INFO] Detecting Docker DNS..."
 # 读取 /etc/resolv.conf 中的 nameserver
