@@ -58,6 +58,12 @@
   ],
   "route": {
     "rules": [
+      {
+        "inbound": "proxy-in",
+        "ip_cidr": ["1.1.1.1/32"],
+        "port": 853,
+        "outbound": "ProxySel"
+      },
       { "inbound": "dns-in", "action": "hijack-dns" },
       {
         "domain": [

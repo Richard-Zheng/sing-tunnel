@@ -25,12 +25,11 @@ MAIN_HOOK = '''
 	}
 '''
 
-DOT_HOOK = '''
-	// A custom resolver owns fallback policy; do not bypass it with direct DoT.
-	if os.Getenv("TUNNEL_DNS_ADDRESS") != "" {
-		return "", nil, fmt.Errorf("direct DoT fallback disabled with TUNNEL_DNS_ADDRESS")
-	}
-'''
+DOT_DIALER = '''// Dial DoT through the same proxy as the edge connection.
+			dialer, ok := proxy.FromEnvironmentUsing(&net.Dialer{}).(proxy.ContextDialer)
+			if !ok {
+				return nil, fmt.Errorf("DoT proxy dialer does not support context")
+			}'''
 
 # Hide Go comments and literals before locating declarations, preserving offsets.
 NON_CODE = re.compile(
@@ -48,7 +47,7 @@ def mask(source, comments_only=False):
     return NON_CODE.sub(replace, source)
 
 
-def insert_hook(source, names, hook):
+def function_body(source, names):
     # These target functions have ordinary signatures, with no interface/struct
     # literals in their argument or result types. Reject ambiguous declarations.
     pattern = r"(?m)^func\s+(?:" + "|".join(map(re.escape, names)) + r")\s*\([^{}]*\)\s*\{"
@@ -56,18 +55,36 @@ def insert_hook(source, names, hook):
     if len(matches) != 1:
         raise ValueError(f"expected exactly one function {names}, found {len(matches)}")
     offset = matches[0].end()
-    # Recognize the previous patch too, without needing a new marker comment.
-    if source[offset:].startswith(hook):
-        return source
     body = mask(source)[offset:]
     depth = 1
     for index, char in enumerate(body):
         depth += (char == "{") - (char == "}")
         if depth == 0:
-            if "TUNNEL_DNS_ADDRESS" in source[offset:offset + index]:
-                raise ValueError(f"function {names} already has a different DNS hook")
-            return source[:offset] + hook + source[offset:]
+            return offset, offset + index
     raise ValueError(f"function {names} has an unclosed body")
+
+
+def insert_hook(source, names, hook):
+    start, end = function_body(source, names)
+    if source[start:].startswith(hook):
+        return source
+    if "TUNNEL_DNS_ADDRESS" in source[start:end]:
+        raise ValueError(f"function {names} already has a different DNS hook")
+    return source[:start] + hook + source[start:]
+
+
+def patch_dot(source):
+    names = ("lookupSRVWithDOT", "lookupSRVWithDoT")
+    start, end = function_body(source, names)
+    body = source[start:end]
+    if DOT_DIALER not in body:
+        matches = list(re.finditer(r"\bvar\s+dialer\s+net\s*\.\s*Dialer\b", mask(body)))
+        if len(matches) != 1:
+            raise ValueError("expected exactly one net.Dialer declaration in DoT fallback")
+        match = matches[0]
+        body = body[:match.start()] + DOT_DIALER + body[match.end():]
+    source = source[:start] + body + source[end:]
+    return add_imports(source, ("fmt", "golang.org/x/net/proxy"))
 
 
 def add_imports(source, packages):
@@ -85,7 +102,7 @@ def add_imports(source, packages):
         found = re.search(r'(?m)^\s*(?:(\w+|\.)\s+)?"' + re.escape(package) + r'"', imports)
         if found is None:
             missing.append(package)
-        elif found[1] not in (None, package):
+        elif found[1] not in (None, package.rsplit("/", 1)[-1]):
             raise ValueError(f"import {package} has unsupported alias {found[1]}")
     return source[:start] + "".join(f'\n\t"{p}"' for p in missing) + source[start:]
 
@@ -94,17 +111,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", nargs="?", type=Path, default=Path("."))
     args = parser.parse_args()
-    targets = [
-        ("cmd/cloudflared/main.go", ("main",), MAIN_HOOK, ("context", "net", "os")),
-        ("edgediscovery/allregions/discovery.go", ("lookupSRVWithDOT", "lookupSRVWithDoT"), DOT_HOOK, ("fmt", "os")),
-    ]
+    targets = ["cmd/cloudflared/main.go", "edgediscovery/allregions/discovery.go"]
     pending = []
     gofmt = shutil.which("gofmt")
     # Validate and prepare both files before writing either of them.
-    for relative, names, hook, imports in targets:
+    for relative in targets:
         path = args.source / relative
         original = path.read_text(encoding="utf-8")
-        updated = add_imports(insert_hook(original, names, hook), imports)
+        if relative == targets[0]:
+            updated = add_imports(insert_hook(original, ("main",), MAIN_HOOK), ("context", "net", "os"))
+        else:
+            updated = patch_dot(original)
         if gofmt and updated != original:
             updated = subprocess.run(
                 [gofmt], input=updated, text=True, capture_output=True, check=True
