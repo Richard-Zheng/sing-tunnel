@@ -1,129 +1,19 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 TEMPLATE_FILE="/template.json"
-NODE_FILE="/nodes.json"
+NODE_FILE="${NODES_FILE:-/nodes.json}"
 FINAL_CONFIG="/config.json"
+TMP_CONFIG="${FINAL_CONFIG}.tmp"
+
+# NODES_REGEX is accepted for backwards compatibility with older compose files.
+REGEX="${NODE_REGEX:-${NODES_REGEX:-.*}}"
 
 # --------------------------------------------------------
-# 0. 节点缝合 (Merge Nodes)
-# --------------------------------------------------------
-if ! command -v jq &> /dev/null; then
-    echo "[ERROR] jq is not installed. Please install jq in your Dockerfile."
-    exit 1
-fi
-
-if [ -f "$NODE_FILE" ]; then
-    echo "[INFO] Found $NODE_FILE, merging with template..."
-    
-    REGEX="${NODE_REGEX:-.*}"
-    
-    jq --arg regex "$REGEX" --slurpfile node_data "$NODE_FILE" '
-        # 获取 nodes.json 中的 outbounds 数组
-        ($node_data[0].outbounds | if type == "array" then . else [] end) as $nodes_json_outbounds |
-        
-        # 获取 template.json 中的 outbounds 数组
-        (.outbounds | if type == "array" then . else [] end) as $template_outbounds |
-        
-        # 合并两个来源的节点
-        ($nodes_json_outbounds + $template_outbounds) as $raw_nodes |
-        
-        # 定义黑名单类型
-        ["selector", "urltest", "direct", "block", "dns"] as $ignored_types |
-        
-        # 筛选有效的节点对象
-        [ $raw_nodes[] | select(
-            type == "object" and 
-            .type != null and 
-            (.type as $t | $ignored_types | index($t) == null) and 
-            (.tag | type == "string" and test($regex))
-        ) ] as $filtered_nodes |
-        
-        # 提取 tag 列表
-        ($filtered_nodes | map(.tag)) as $node_tags |
-        
-        # 构建 Auto-Select 组
-        (if ($node_tags | length) > 0 then
-            {
-                "type": "urltest",
-                "tag": "ProxySel", 
-                "outbounds": $node_tags,
-                "url": "https://cp.cloudflare.com/generate_204",
-                "interval": "30m",
-                "tolerance": 10,
-                "interrupt_exist_connections": false
-            }
-        else null end) as $auto_group |
-        
-        # 合并到 template 的 outbounds
-        .outbounds = (
-            $filtered_nodes + 
-            (if $auto_group != null then [$auto_group] else [] end)
-        )
-    ' "$TEMPLATE_FILE" > "$FINAL_CONFIG"
-    
-    echo "[INFO] Nodes merged using regex: '$REGEX'."
-else
-    echo "[INFO] No nodes.json found. Processing template only..."
-    
-    REGEX="${NODE_REGEX:-.*}"
-    
-    jq --arg regex "$REGEX" '
-        # 获取 template.json 中的 outbounds 数组
-        (.outbounds | if type == "array" then . else [] end) as $raw_nodes |
-        
-        # 定义黑名单类型
-        ["selector", "urltest", "direct", "block", "dns"] as $ignored_types |
-        
-        # 筛选有效的节点对象
-        [ $raw_nodes[] | select(
-            type == "object" and 
-            .type != null and 
-            (.type as $t | $ignored_types | index($t) == null) and 
-            (.tag | type == "string" and test($regex))
-        ) ] as $filtered_nodes |
-        
-        # 提取 tag 列表
-        ($filtered_nodes | map(.tag)) as $node_tags |
-        
-        # 构建 Auto-Select 组
-        (if ($node_tags | length) > 0 then
-            {
-                "type": "urltest",
-                "tag": "ProxySel", 
-                "outbounds": $node_tags,
-                "url": "https://cp.cloudflare.com/generate_204",
-                "interval": "30m",
-                "tolerance": 10,
-                "interrupt_exist_connections": false
-            }
-        else null end) as $auto_group |
-        
-        # 更新 outbounds
-        .outbounds = (
-            $filtered_nodes + 
-            (if $auto_group != null then [$auto_group] else [] end)
-        )
-    ' "$TEMPLATE_FILE" > "$FINAL_CONFIG"
-    
-    echo "[INFO] Template processed using regex: '$REGEX'."
-fi
-
-# --------------------------------------------------------
-# 1. 设置 sing-box 日志等级
-# --------------------------------------------------------
-if [ -n "$SING_BOX_LOG_LEVEL" ]; then
-    echo "[INFO] Setting sing-box log level to: $SING_BOX_LOG_LEVEL"
-    jq --arg level "$SING_BOX_LOG_LEVEL" '.log.level = $level' "$FINAL_CONFIG" > "${FINAL_CONFIG}.tmp" && mv "${FINAL_CONFIG}.tmp" "$FINAL_CONFIG"
-fi
-
-# --------------------------------------------------------
-# 2. 动态探测 Docker DNS IP
+# 0. Detect the Docker embedded DNS resolver
 # --------------------------------------------------------
 echo "[INFO] Detecting Docker DNS..."
-# 读取 /etc/resolv.conf 中的 nameserver
-DOCKER_DNS_IP=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | head -n 1)
-
+DOCKER_DNS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
 if [ -z "$DOCKER_DNS_IP" ]; then
     echo "[WARN] Could not detect DNS from /etc/resolv.conf, falling back to 127.0.0.11"
     DOCKER_DNS_IP="127.0.0.11"
@@ -131,33 +21,112 @@ else
     echo "[INFO] Detected Docker DNS IP: $DOCKER_DNS_IP"
 fi
 
-# 使用 sed 将模板中的 __DOCKER_DNS__ 替换为真实 IP
-# 注意：这里操作的是已经生成的 FINAL_CONFIG
-sed -i "s/__DOCKER_DNS__/$DOCKER_DNS_IP/g" "$FINAL_CONFIG"
+# --------------------------------------------------------
+# 1. Render the template (DNS placeholder, optional log level)
+# --------------------------------------------------------
+sed "s/__DOCKER_DNS__/$DOCKER_DNS_IP/g" "$TEMPLATE_FILE" > "$FINAL_CONFIG"
+
+if [ -n "${SING_BOX_LOG_LEVEL:-}" ]; then
+    echo "[INFO] Setting sing-box log level to: $SING_BOX_LOG_LEVEL"
+    jq --arg level "$SING_BOX_LOG_LEVEL" '.log.level = $level' "$FINAL_CONFIG" > "$TMP_CONFIG"
+    mv "$TMP_CONFIG" "$FINAL_CONFIG"
+fi
 
 # --------------------------------------------------------
-# 3. 系统网络配置 (劫持与启动)
+# 2. Merge nodes.json into the template (when present)
 # --------------------------------------------------------
+if [ ! -f "$NODE_FILE" ]; then
+    echo "[INFO] No $NODE_FILE found, using $TEMPLATE_FILE as-is."
+else
+    echo "[INFO] Found $NODE_FILE, merging with template..."
 
+    jq --arg regex "$REGEX" --slurpfile node_data "$NODE_FILE" '
+        # Outbounds fall into two groups:
+        #   proxy nodes    - real protocols (trojan, vless, hysteria2, ...);
+        #                    taken from nodes.json and/or the template, filtered
+        #                    by tag, then collected into the ProxySel group.
+        #   infrastructure - selector/urltest/direct/block/dns; taken from the
+        #                    template verbatim, because route.final and the DNS
+        #                    detour reference them by tag.
+        ["selector", "urltest", "direct", "block", "dns"] as $infra_types |
+
+        ($node_data[0].outbounds // []) as $node_outbounds |
+        (.outbounds // []) as $template_outbounds |
+
+        # ProxySel is regenerated below, so it is never treated as an input.
+        [ ($node_outbounds + $template_outbounds)[]
+          | select(
+              type == "object"
+              and .type != null
+              and (.tag | type == "string")
+              and .tag != "ProxySel"
+              and (.type as $t | $infra_types | index($t) == null)
+              and (.tag | test($regex))
+            )
+        ] as $proxies |
+
+        [ $template_outbounds[]
+          | select(
+              type == "object"
+              and (.tag | type == "string")
+              and .tag != "ProxySel"
+              and (.type as $t | $infra_types | index($t) != null)
+            )
+        ] as $infra |
+
+        ($proxies | map(.tag)) as $tags |
+
+        .outbounds = (
+            $proxies + $infra +
+            [ {
+                "type": "urltest",
+                "tag": "ProxySel",
+                # ProxySel is referenced by the DNS detour and route rules, so
+                # it must always exist; fall back to DirectOut with no nodes.
+                "outbounds": (if ($tags | length) > 0 then $tags else ["DirectOut"] end),
+                "url": "https://cp.cloudflare.com/generate_204",
+                "interval": "30m",
+                "tolerance": 10,
+                "interrupt_exist_connections": false
+              } ]
+        )
+    ' "$FINAL_CONFIG" > "$TMP_CONFIG"
+
+    mv "$TMP_CONFIG" "$FINAL_CONFIG"
+    echo "[INFO] Nodes merged using regex: '$REGEX'."
+fi
+
+# --------------------------------------------------------
+# 3. Start sing-box
+# --------------------------------------------------------
 echo "[INFO] Starting sing-box..."
-# 启动时使用 FINAL_CONFIG
 /usr/local/bin/sing-box run -c "$FINAL_CONFIG" &
-sleep 2
+SING_BOX_PID=$!
 
-echo "[INFO] Configuring Proxy Environment..."
-# 这里的关键是：打过补丁的 cloudflared 能够识别 ALL_PROXY 并正确走 SOCKS5 远程解析 DNS
+# Fail fast if sing-box dies during startup instead of limping on to cloudflared.
+sleep 2
+if ! kill -0 "$SING_BOX_PID" 2>/dev/null; then
+    echo "[ERROR] sing-box exited during startup. Last log lines:"
+    wait "$SING_BOX_PID" || true
+    exit 1
+fi
+
+# --------------------------------------------------------
+# 4. Start cloudflared through the local SOCKS5 proxy
+# --------------------------------------------------------
+# The patched cloudflared reads ALL_PROXY to tunnel its HTTP/2 connection
+# through sing-box, and TUNNEL_DNS_ADDRESS to resolve edge hostnames via
+# sing-box instead of the system resolver.
 export ALL_PROXY="socks5://127.0.0.1:7080"
 
-echo "[INFO] Starting Cloudflared..."
-if [ -z "$TUNNEL_TOKEN" ]; then
+echo "[INFO] Starting cloudflared..."
+if [ -z "${TUNNEL_TOKEN:-}" ]; then
     if [ -f "/etc/cloudflared/config.yml" ]; then
         echo "[INFO] TUNNEL_TOKEN not provided, starting cloudflared in local config mode."
         exec cloudflared tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
-    else
-        echo "[WARN] Neither TUNNEL_TOKEN nor config.yml found. Starting in trycloudflare mode..."
-        # 使用环境变量 TRY_URL 或默认转发到本地 8080 端口
-        exec cloudflared tunnel --no-autoupdate --url "${TRY_URL:-http://host.docker.internal:8080}"
     fi
+    echo "[WARN] Neither TUNNEL_TOKEN nor config.yml found. Starting in trycloudflare mode..."
+    exec cloudflared tunnel --no-autoupdate --url "${TRY_URL:-http://host.docker.internal:8080}"
 fi
 
 exec cloudflared tunnel --no-autoupdate run

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Insert the DNS hooks into cloudflared; apply cloudflared_socks.patch separately.
 
-Usage: python3 patch_cloudflared.py /path/to/cloudflared
+Usage: python3 patch_cloudflared_dns.py [source-dir]
 """
 
 import argparse

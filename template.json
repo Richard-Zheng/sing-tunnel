@@ -84,6 +84,15 @@
     {
       "type": "direct",
       "tag": "DirectOut"
+    },
+    {
+      "type": "urltest",
+      "tag": "ProxySel",
+      "outbounds": ["DirectOut"],
+      "url": "https://cp.cloudflare.com/generate_204",
+      "interval": "30m",
+      "tolerance": 10,
+      "interrupt_exist_connections": false
     }
   ]
 }

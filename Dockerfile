@@ -1,9 +1,10 @@
 # ==========================================
 # Stage 1: Cloudflared Builder
 # ==========================================
-FROM --platform=$BUILDPLATFORM golang:1.24 AS cloudflared-builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS cloudflared-builder
 
 ARG TARGETARCH
+ARG CLOUDFLARED_VERSION=2026.9.3
 ENV GOARCH=$TARGETARCH \
     GO111MODULE=on \
     CGO_ENABLED=0 \
@@ -11,20 +12,24 @@ ENV GOARCH=$TARGETARCH \
 
 WORKDIR /go/src/github.com/cloudflare/cloudflared/
 
-# 1. 安装基础编译工具
-RUN apt-get update && apt-get install -y git make curl
+# 1. Install build tools
+RUN apt-get update && apt-get install -y --no-install-recommends git make ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# 2. 克隆 Cloudflared 源码
-# 这里拉取最新代码，如果 patch 冲突，可能需要回退 cloudflared 版本
-RUN git clone https://github.com/cloudflare/cloudflared.git .
+# 2. Clone Cloudflared. Pinned to a release tag so the patches below cannot
+#    silently break against upstream HEAD.
+RUN git clone --depth 1 --branch ${CLOUDFLARED_VERSION} \
+        https://github.com/cloudflare/cloudflared.git .
 
-# 3. 【核心】下载并应用 socks 代理补丁
+# 3. Apply the two patches:
+#    - cloudflared_socks.patch: route the HTTP/2 edge connection via ALL_PROXY.
+#    - patch_cloudflared_dns.py: resolve via TUNNEL_DNS_ADDRESS.
 COPY cloudflared_socks.patch /go/src/github.com/cloudflare/cloudflared/
 COPY patch_cloudflared_dns.py /go/src/github.com/cloudflare/cloudflared/
-RUN git apply -v cloudflared_socks.patch
-RUN python3 patch_cloudflared_dns.py
+RUN git apply -v cloudflared_socks.patch \
+    && python3 patch_cloudflared_dns.py
 
-# 4. 编译
+# 4. Compile
 RUN make cloudflared
 
 # ==========================================
@@ -32,65 +37,66 @@ RUN make cloudflared
 # ==========================================
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS singbox-builder
 
-ARG SINGBOX_VERSION=1.12.15
+ARG SINGBOX_VERSION=1.14.2
 ARG TARGETOS TARGETARCH
 
 WORKDIR /go/src/github.com/sagernet/sing-box
 
-# 安装 git 和编译工具
+# Install git and build tools
 RUN apk add --no-cache git build-base
 
-# 拉取源码并切换到指定版本
-RUN git clone https://github.com/SagerNet/sing-box.git . && \
-    git checkout v${SINGBOX_VERSION}
+# Fetch source at the pinned release
+RUN git clone --depth 1 --branch v${SINGBOX_VERSION} \
+        https://github.com/SagerNet/sing-box.git .
 
+# Only the tags this container actually needs:
+#   with_utls       - uTLS / Reality (required by the proxy nodes in template)
+#   with_quic       - QUIC, HTTP/3 DNS and Hysteria/TUIC nodes
+#   with_grpc       - gRPC V2Ray transport
+#   with_wireguard  - WireGuard outbound
+# Deliberately omitted (see README): with_gvisor, with_clash_api, with_acme,
+# with_tailscale, with_naive_outbound (pulls Chromium/cronet), with_ccm,
+# with_ocm, with_cloudflared, with_usbip, with_openvpn, with_openconnect.
 ENV CGO_ENABLED=0 \
     GOOS=$TARGETOS \
-    GOARCH=$TARGETARCH
+    GOARCH=$TARGETARCH \
+    SINGBOX_TAGS="with_utls,with_quic,with_grpc,with_wireguard"
 
-# 编译 sing-box
-RUN export COMMIT=$(git rev-parse --short HEAD) \
-    && export VERSION=$(go run ./cmd/internal/read_tag) \
-    && go build -v -trimpath -tags \
-        "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale" \
+RUN export VERSION=$(go run ./cmd/internal/read_tag) \
+    && go build -v -trimpath -tags "$SINGBOX_TAGS" \
         -o /go/bin/sing-box \
-        -ldflags "-X \"github.com/sagernet/sing-box/constant.Version=$VERSION\" -s -w -buildid=" \
+        -ldflags "-X \"github.com/sagernet/sing-box/constant.Version=$VERSION\" \
+                  -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 \
+                  -s -w -buildid=" \
         ./cmd/sing-box
 
 # ==========================================
-# Stage 3: Final (运行时环境)
+# Stage 3: Final (runtime)
 # ==========================================
 FROM debian:bookworm-slim
 
 ARG TARGETARCH
 
-# 安装运行时依赖
-# jq: 用于处理节点 JSON
-# ca-certificates: 用于 HTTPS 验证
-#RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates jq iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# 1. 安装 Sing-box
+# 1. Install sing-box
 COPY --from=singbox-builder /go/bin/sing-box /usr/local/bin/sing-box
-RUN chmod +x /usr/local/bin/sing-box
 
-# 2. 复制编译好的 Cloudflared
+# 2. Install the patched cloudflared
 COPY --from=cloudflared-builder /go/src/github.com/cloudflare/cloudflared/cloudflared /usr/local/bin/cloudflared
-RUN chmod +x /usr/local/bin/cloudflared
 
-# 3. 复制启动脚本
+# 3. Entrypoint + config template
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
 COPY template.json /template.json
+RUN chmod +x /entrypoint.sh /usr/local/bin/sing-box /usr/local/bin/cloudflared
 
-# 强制使用 HTTP2 (Patch 必须配合此协议才能走代理)
+# Force HTTP/2: the SOCKS patch only covers the HTTP/2 transport.
 ENV TUNNEL_TRANSPORT_PROTOCOL=http2
 
-# 强制使用 sing-box DNS (获取离代理最近的节点)
+# Resolve cloudflared's DNS through sing-box (nearest edge to the proxy exit).
 ENV TUNNEL_DNS_ADDRESS=127.0.0.1:5533
 
 ENTRYPOINT ["/entrypoint.sh"]

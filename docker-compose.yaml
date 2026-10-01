@@ -4,7 +4,8 @@ services:
     container_name: cf-tunnel
     restart: always
     environment:
-      - NODES_REGEX=香港
+      # Tag filter for selecting proxy nodes out of nodes.json (regex).
+      - NODE_REGEX=香港
     logging:
       driver: none
     volumes:
