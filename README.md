@@ -8,11 +8,7 @@ Previously I just ran sing-box (with [auto_route](https://sing-box.sagernet.org/
 
 ## How It Works
 
-It consists of two main parts:
+There's two patch:
 
-1. **sing-box**: opens a local SOCKS5 proxy server listening on `127.0.0.1:7080`, and a DNS server on `127.0.0.1:53`. It's configured to route DNS queries and TCP traffic related to Cloudflare Tunnels through the remote proxy server, other traffic is directly forwarded.
-2. **cloudflared**: modified to use the local SOCKS5 proxy provided by sing-box.
-
-## Future Work
-
-- non-root support: currently sing-box needs to run as root to bind to port 53 for DNS. If cloudflared can be patched to use a custom DNS server (eg. `127.0.0.1:5353`), sing-box can run as non-root user.
+1. `patch_cloudflared_dns.py`: Use `TUNNEL_DNS_ADDRESS` environment variable to set DNS server `cloudflared` uses.
+2. `cloudflared_socks_dns.patch`: Use `ALL_PROXY` environment variable to transport `http2` tunnel.

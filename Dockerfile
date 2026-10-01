@@ -20,7 +20,9 @@ RUN git clone https://github.com/cloudflare/cloudflared.git .
 
 # 3. 【核心】下载并应用 socks 代理补丁
 COPY cloudflared_socks.patch /go/src/github.com/cloudflare/cloudflared/
+COPY patch_cloudflared_dns.py /go/src/github.com/cloudflare/cloudflared/
 RUN git apply -v cloudflared_socks.patch
+RUN python3 patch_cloudflared_dns.py
 
 # 4. 编译
 RUN make cloudflared
@@ -87,5 +89,8 @@ COPY template.json /template.json
 
 # 强制使用 HTTP2 (Patch 必须配合此协议才能走代理)
 ENV TUNNEL_TRANSPORT_PROTOCOL=http2
+
+# 强制使用 sing-box DNS (获取离代理最近的节点)
+ENV TUNNEL_DNS_ADDRESS=127.0.0.1:5533
 
 ENTRYPOINT ["/entrypoint.sh"]

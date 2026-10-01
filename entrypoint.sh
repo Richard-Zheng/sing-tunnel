@@ -139,10 +139,6 @@ sed -i "s/__DOCKER_DNS__/$DOCKER_DNS_IP/g" "$FINAL_CONFIG"
 # 3. 系统网络配置 (劫持与启动)
 # --------------------------------------------------------
 
-echo "[INFO] Taking over System DNS..."
-# 现在才覆盖 resolv.conf，让 sing-box 接管
-echo "nameserver 127.0.0.1" > /etc/resolv.conf
-
 echo "[INFO] Starting sing-box..."
 # 启动时使用 FINAL_CONFIG
 /usr/local/bin/sing-box run -c "$FINAL_CONFIG" &
